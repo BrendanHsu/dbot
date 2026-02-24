@@ -68,4 +68,13 @@ async def on_message(message):
         print("---")
         await message.channel.send(response)
 
+    if message.content.startswith('$test'):
+        print(f"Message: {message.content}")                
+        message_content = message.content.split("$test")[1]
+        print(f"Question: {message_content}")    
+        response = call_openai(message_content)   
+        print(f"Assistant: {response}")    
+        print("---")
+        await message.channel.send(response)
+
 client.run(DISCORD_TOKEN)
