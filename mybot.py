@@ -69,6 +69,8 @@ async def on_message(message):
         await message.channel.send(response)
 
     if message.content.startswith('$test'):
+        await message.channel.send('Test!')
+        """
         print(f"Message: {message.content}")                
         message_content = message.content.split("$test")[1]
         print(f"Question: {message_content}")    
@@ -76,5 +78,6 @@ async def on_message(message):
         print(f"Assistant: {response}")    
         print("---")
         await message.channel.send(response)
+        """
 
 client.run(DISCORD_TOKEN)
