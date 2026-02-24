@@ -26,7 +26,22 @@ def call_openai(question):
     print(response)
     return response
 
-
+#test 
+def call_test(test):
+    completion = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+             {
+                 "role": "user",
+                 "content": f"Tell me this test was successful:  {test}",
+            },
+        ]
+    )
+    # Print the response
+    response = completion.choices[0].message.content
+    print(response)
+    return response
+  
 # Set up discord
 intents = discord.Intents.default()
 intents.message_content = True  
