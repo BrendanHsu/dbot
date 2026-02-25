@@ -3,6 +3,7 @@ from openai import OpenAI
 import discord
 import os
 import requests
+import re
 from bs4 import BeautifulSoup
 
 # Load environment variables from .env file
@@ -15,84 +16,101 @@ openai_client = OpenAI(api_key=OPENAI_KEY)
 
 VALID_FORMATS = ["standard", "pioneer", "modern", "legacy", "vintage", "pauper", "premodern"]
 
-# Tournament types to include (case-insensitive substring match against event name)
-ALLOWED_TOURNAMENT_TYPES = [
-    "mtgo challenge",
-    "pro tour",
-    "spotlight",
-    "world championship",
-    "mtgo showcase challenge",
-    "mtgo super qualifier",
-    "arena championship",
-    "mythic championship",
-    "regional championship",
-]
+# TODO: Re-enable filtering once basic scraping is confirmed working.
+# Filter tournaments to only these event types:
+# ALLOWED_TOURNAMENT_TYPES = [
+#     "challenge",
+#     "pro tour",
+#     "spotlight",
+#     "world championship",
+#     "showcase challenge",
+#     "super qualifier",
+#     "arena championship",
+#     "mythic championship",
+#     "regional championship",
+# ]
+# def is_allowed_tournament(name):
+#     name_lower = name.lower()
+#     return any(t in name_lower for t in ALLOWED_TOURNAMENT_TYPES)
 
-def is_allowed_tournament(name):
-    name_lower = name.lower()
-    return any(t in name_lower for t in ALLOWED_TOURNAMENT_TYPES)
+def get_decklist_count(table):
+    """
+    After each tournament table, MTGGoldfish renders a <p> tag like 'View All 32 Decks'.
+    If that tag is absent, the table shows all decks (count = number of rows).
+    Returns an int.
+    """
+    p = table.find_next_sibling("p")
+    if p:
+        match = re.search(r"View All (\d+) Decks", p.get_text())
+        if match:
+            return int(match.group(1))
+    # No "View All" tag — all decks are shown in the table
+    return len([r for r in table.find_all("tr") if r.find("td")])
 
-def tournaments(format):
-    format = format.strip().lower()
-    if format not in VALID_FORMATS:
-        return f"Invalid format '{format}'. Valid formats are: {', '.join(VALID_FORMATS)}"
+def tournaments(format_name):
+    format_name = format_name.strip().lower()
+    if format_name not in VALID_FORMATS:
+        return f"Invalid format '{format_name}'. Valid formats are: {', '.join(VALID_FORMATS)}"
 
-    url = f"https://www.mtggoldfish.com/tournaments/{format}"
+    print(f"Fetching recent {format_name} tournaments...")
+
+    url = f"https://www.mtggoldfish.com/tournaments/{format_name}"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, "html.parser")
+        resp = requests.get(url, headers=headers, timeout=10)
+        print(f"Page status: {resp.status_code}")
 
-        # Find tournament event headers (h4 tags with links)
-        event_headers = soup.find_all("h4")
+        soup = BeautifulSoup(resp.text, "html.parser")
+        h4s = soup.find_all("h4")
+        print(f"Tournament headers found: {len(h4s)}")
 
-        qualifying_events = []
-
-        for h4 in event_headers:
-            a_tag = h4.find("a")
-            if not a_tag:
+        results = []
+        for h4 in h4s:
+            a = h4.find("a")
+            if not a:
                 continue
-            event_name = a_tag.get_text(strip=True)
-            if not is_allowed_tournament(event_name):
+
+            event_name = a.get_text(strip=True)
+            event_link = "https://www.mtggoldfish.com" + a["href"]
+
+            table = h4.find_next_sibling("table")
+            if not table:
                 continue
-            event_link = "https://www.mtggoldfish.com" + a_tag["href"]
-            qualifying_events.append({"name": event_name, "link": event_link})
 
-        if not qualifying_events:
-            return f"No recent qualifying tournaments found for {format.capitalize()}. " \
-                   f"Looking for: {', '.join(ALLOWED_TOURNAMENT_TYPES)}"
-
-        # Use the most recent qualifying event
-        event = qualifying_events[0]
-
-        # Fetch that tournament's page to get full results
-        t_response = requests.get(event["link"], headers=headers)
-        t_soup = BeautifulSoup(t_response.text, "html.parser")
-
-        result_rows = t_soup.select("table tbody tr")
-        # Filter out placeholder "Loading Indicator" rows
-        real_rows = [r for r in result_rows if r.find("td") and "Loading" not in r.get_text()]
-        entrant_count = len(real_rows)
-
-        # Build top 5 entries
-        lines = []
-        for row in real_rows[:5]:
-            cols = row.find_all("td")
-            if len(cols) < 2:
+            # Filter: only tournaments with 32+ decks
+            decklist_count = get_decklist_count(table)
+            if decklist_count < 32:
+                print(f"  Skipping '{event_name}' ({decklist_count} decks)")
                 continue
-            record = cols[0].get_text(strip=True)   # e.g. "1st" or "7-2"
-            deck_a = cols[1].find("a")
+
+            # TODO: Uncomment to also filter by tournament type:
+            # if not is_allowed_tournament(event_name):
+            #     continue
+
+            rows = [r for r in table.find_all("tr") if r.find("td")]
+            if not rows:
+                continue
+
+            cols = rows[0].find_all("td")
+            record    = cols[0].get_text(strip=True)
+            deck_a    = cols[1].find("a")
             deck_name = deck_a.get_text(strip=True) if deck_a else cols[1].get_text(strip=True)
-            lines.append(
-                f"* {deck_name} | {record} | {entrant_count} players | [{event['name']}]({event['link']})"
-            )
 
-        return "\n".join(lines) if lines else f"No deck data found for {event['name']}."
+            print(f"  Adding '{event_name}' ({decklist_count} decks)")
+            results.append(f"* {deck_name} | {record} | {decklist_count} players | [{event_name}]({event_link})")
+
+            if len(results) >= 3:
+                break
+
+        if not results:
+            return f"No tournaments with 32+ decks found for {format_name.capitalize()}."
+
+        return "\n".join(results)
 
     except Exception as e:
-        print(f"Error fetching tournaments: {e}")
-        return "Sorry, I couldn't fetch tournament data right now. Please try again later."
+        print(f"Error: {e}")
+        return "Sorry, couldn't fetch tournament data right now. Please try again later."
 
 
 def call_openai(question):
